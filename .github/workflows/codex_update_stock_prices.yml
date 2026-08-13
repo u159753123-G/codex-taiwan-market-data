@@ -1,0 +1,46 @@
+name: CODEX 更新台股盤後行情
+
+on:
+  schedule:
+    # Asia/Taipei 15:35、19:25；週一至週五。
+    - cron: "35 7 * * 1-5"
+    - cron: "25 11 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: codex-stock-prices
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 驗證行情解析器
+        run: python -m unittest tests/codex_test_stock_prices.py -v
+
+      - name: 下載官方盤後行情
+        run: python scripts/market_data/codex_fetch_stock_prices.py --output-dir data/market --latest-only
+
+      - name: 提交行情更新
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/market
+          if git diff --cached --quiet; then
+            echo "行情沒有變更"
+          else
+            git commit -m "data: update CODEX closing prices"
+            git push
+          fi
