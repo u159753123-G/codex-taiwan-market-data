@@ -56,6 +56,21 @@ class PriceNormalizationTests(unittest.TestCase):
         self.assertEqual(trade_date, "2026-08-13")
         self.assertEqual(symbols["7828"]["close"], 1910)
 
+    def test_taiex_history_parser(self):
+        payload = json.dumps({
+            "stat": "OK",
+            "data": [["115/08/12", "45,175.70", "45,529.48", "45,175.70", "45,518.07"]],
+        }, ensure_ascii=False).encode()
+        rows = prices.parse_taiex_history(payload)
+        self.assertEqual(rows, [{
+            "date": "2026-08-12", "open": 45175.7, "high": 45529.48,
+            "low": 45175.7, "close": 45518.07,
+        }])
+
+    def test_taiex_history_rejects_empty_payload(self):
+        with self.assertRaisesRegex(ValueError, "沒有有效收盤指數"):
+            prices.parse_taiex_history(json.dumps({"stat": "OK", "data": []}).encode())
+
 
 class FallbackTests(unittest.TestCase):
     def test_failed_market_keeps_previous_data_as_stale(self):

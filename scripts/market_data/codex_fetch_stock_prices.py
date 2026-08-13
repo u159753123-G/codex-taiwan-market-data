@@ -17,6 +17,7 @@ from typing import Any
 
 TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 TPEX_URL = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&se=EW&o=data"
+TAIEX_HISTORY_URL = "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={year:04d}{month:02d}01"
 HEADERS = {"User-Agent": "codex-taiwan-portfolio/1.0"}
 MIN_RECORDS = {"TWSE": 500, "TPEx": 300}
 
@@ -156,6 +157,60 @@ def parse_tpex(raw: bytes) -> tuple[dict[str, dict[str, Any]], str | None]:
     return symbols, next(iter(dates), None)
 
 
+def parse_taiex_history(raw: bytes) -> list[dict[str, Any]]:
+    payload = json.loads(decode_bytes(raw))
+    if payload.get("stat") != "OK" or not isinstance(payload.get("data"), list):
+        raise ValueError(f"TAIEX 歷史資料格式錯誤: {payload.get('stat', 'unknown')}")
+    prices: list[dict[str, Any]] = []
+    for source in payload["data"]:
+        if not isinstance(source, list) or len(source) < 5:
+            continue
+        traded_on = roc_to_iso(source[0])
+        close = to_number(source[4])
+        if not traded_on or close is None:
+            continue
+        prices.append({
+            "date": traded_on,
+            "open": to_number(source[1]),
+            "high": to_number(source[2]),
+            "low": to_number(source[3]),
+            "close": close,
+        })
+    if not prices:
+        raise ValueError("TAIEX 歷史資料沒有有效收盤指數")
+    return prices
+
+
+def update_taiex_history(output_dir: Path) -> dict[str, Any]:
+    history_path = output_dir / "codex_taiex_history.json"
+    previous = load_json(history_path) or {}
+    merged = {row["date"]: row for row in previous.get("prices", []) if row.get("date")}
+    now = datetime.now(timezone.utc)
+    months = [(now.year, month) for month in range(1, now.month + 1)] if not merged else [(now.year, now.month)]
+    errors: list[str] = []
+    fetched = 0
+    for year, month in months:
+        try:
+            rows = parse_taiex_history(fetch_bytes(TAIEX_HISTORY_URL.format(year=year, month=month)))
+            merged.update((row["date"], row) for row in rows)
+            fetched += len(rows)
+        except Exception as error:
+            errors.append(f"{year:04d}-{month:02d}: {error}")
+    prices = [merged[date] for date in sorted(merged)]
+    result = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ticker": "IX0001",
+        "name": "發行量加權股價指數",
+        "source": "TWSE",
+        "status": "fresh" if fetched else ("stale" if prices else "failed"),
+        "latest": prices[-1] if prices else None,
+        "prices": prices,
+        "errors": errors,
+    }
+    atomic_json_write(history_path, result)
+    return result
+
+
 def load_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -261,6 +316,12 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
         reverse=True,
     )
     atomic_json_write(output_dir / "codex_trade_dates.json", {"dates": snapshot_dates})
+    benchmark = update_taiex_history(output_dir)
+    result["benchmark"] = {
+        "ticker": benchmark["ticker"],
+        "status": benchmark["status"],
+        "latest": benchmark["latest"],
+    }
     return result
 
 
@@ -279,6 +340,8 @@ def main() -> None:
     fresh = sum(row["status"] == "fresh" for row in result["symbols"].values())
     stale = sum(row["status"] == "stale" for row in result["symbols"].values())
     print(f"完成：{len(result['symbols'])} 檔（fresh {fresh}／stale {stale}），交易日 {result['tradeDate']}")
+    benchmark = result.get("benchmark", {})
+    print(f"大盤：{benchmark.get('ticker')} {benchmark.get('status')}，最新 {benchmark.get('latest')}")
     for error in result["errors"]:
         print(f"[{error['market']}] {error['message']}")
     if args.publish_url:
