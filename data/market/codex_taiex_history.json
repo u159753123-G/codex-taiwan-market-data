@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-09-02T12:16:34+00:00",
+  "generatedAt": "2026-09-02T15:10:02+00:00",
   "ticker": "IX0001",
   "name": "發行量加權股價指數",
   "source": "TWSE",
-  "status": "stale",
+  "status": "fresh",
   "latest": {
     "date": "2026-09-02",
     "open": 46901.32,
@@ -1140,7 +1140,5 @@
       "close": 46164.72
     }
   ],
-  "errors": [
-    "2026-09: The read operation timed out"
-  ]
+  "errors": []
 }
