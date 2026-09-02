@@ -31,7 +31,9 @@ jobs:
         run: python -m unittest tests/codex_test_stock_prices.py -v
 
       - name: 下載官方盤後行情
-        run: python scripts/market_data/codex_fetch_stock_prices.py --output-dir data/market --latest-only
+        id: fetch
+        continue-on-error: true
+        run: python scripts/market_data/codex_fetch_stock_prices.py --output-dir data/market --latest-only --fail-on-fetch-error
 
       - name: 提交行情更新
         run: |
@@ -44,3 +46,9 @@ jobs:
             git commit -m "data: update CODEX closing prices"
             git push
           fi
+
+      - name: 回報行情來源連續失敗
+        if: steps.fetch.outcome == 'failure'
+        run: |
+          echo "官方行情來源在所有重試後仍失敗；已保留前次收盤並提交失敗紀錄。"
+          exit 1

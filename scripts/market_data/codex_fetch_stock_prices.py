@@ -10,6 +10,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ TPEX_URL = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk
 TAIEX_HISTORY_URL = "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={year:04d}{month:02d}01"
 HEADERS = {"User-Agent": "codex-taiwan-portfolio/1.0"}
 MIN_RECORDS = {"TWSE": 500, "TPEx": 300}
+TWSE_RETRY_DELAYS = (2, 4, 8)
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -257,14 +259,29 @@ def validate_market(market: str, symbols: dict[str, dict[str, Any]]) -> None:
         raise ValueError("所有收盤價皆為空值")
 
 
-def stale_market(previous: dict[str, Any], market: str) -> dict[str, dict[str, Any]]:
-    stale: dict[str, dict[str, Any]] = {}
+def fetch_market(
+    url: str,
+    parser: Any,
+    retry_delays: tuple[int, ...] = (),
+) -> tuple[dict[str, dict[str, Any]], str | None, int]:
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            symbols, trade_date = parser(fetch_bytes(url))
+            return symbols, trade_date, attempt
+        except Exception as error:
+            if attempt > len(retry_delays):
+                raise RuntimeError(f"連續 {attempt} 次請求失敗：{error}") from error
+            time.sleep(retry_delays[attempt - 1])
+
+
+def previous_market(previous: dict[str, Any], market: str) -> dict[str, dict[str, Any]]:
+    retained: dict[str, dict[str, Any]] = {}
     for symbol, source in previous.get("symbols", {}).items():
         if source.get("market") == market:
-            row = dict(source)
-            row["status"] = "stale"
-            stale[symbol] = row
-    return stale
+            retained[symbol] = dict(source)
+    return retained
 
 
 def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
@@ -274,26 +291,50 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
     errors: list[dict[str, str]] = []
     market_status: dict[str, dict[str, Any]] = {}
     trade_dates: list[str] = []
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     for market, url, parser in (
         ("TWSE", TWSE_URL, parse_twse),
         ("TPEx", TPEX_URL, parse_tpex),
     ):
         try:
-            symbols, trade_date = parser(fetch_bytes(url))
+            retry_delays = TWSE_RETRY_DELAYS if market == "TWSE" else ()
+            symbols, trade_date, attempts = fetch_market(url, parser, retry_delays)
             validate_market(market, symbols)
             combined.update(symbols)
             if trade_date:
                 trade_dates.append(trade_date)
-            market_status[market] = {"status": "success", "tradeDate": trade_date, "recordCount": len(symbols)}
+            market_status[market] = {
+                "status": "success",
+                "fetchStatus": "success",
+                "dataStatus": "fresh",
+                "tradeDate": trade_date,
+                "recordCount": len(symbols),
+                "attemptCount": attempts,
+                "consecutiveFetchFailures": 0,
+                "lastAttemptAt": generated_at,
+                "lastSuccessAt": generated_at,
+                "error": None,
+            }
         except Exception as error:
-            fallback = stale_market(previous, market)
+            fallback = previous_market(previous, market)
             combined.update(fallback)
             errors.append({"market": market, "message": str(error)})
+            previous_status = previous.get("markets", {}).get(market, {})
+            retained_data_status = previous_status.get("dataStatus")
+            if retained_data_status not in {"fresh", "stale", "missing"}:
+                retained_data_status = "fresh" if any(row.get("status") == "fresh" for row in fallback.values()) else ("stale" if fallback else "missing")
             market_status[market] = {
                 "status": "stale" if fallback else "failed",
+                "fetchStatus": "failed",
+                "dataStatus": retained_data_status,
                 "tradeDate": next((row.get("tradeDate") for row in fallback.values()), None),
                 "recordCount": len(fallback),
+                "attemptCount": len(TWSE_RETRY_DELAYS) + 1 if market == "TWSE" else 1,
+                "consecutiveFetchFailures": int(previous_status.get("consecutiveFetchFailures") or 0) + 1,
+                "lastAttemptAt": generated_at,
+                "lastSuccessAt": previous_status.get("lastSuccessAt") or (previous.get("generatedAt") if fallback else None),
+                "error": str(error),
             }
 
     if not combined:
@@ -301,7 +342,7 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
 
     trade_date = max(trade_dates) if trade_dates else previous.get("tradeDate")
     result = {
-        "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generatedAt": generated_at,
         "tradeDate": trade_date,
         "markets": market_status,
         "symbols": combined,
@@ -335,6 +376,7 @@ def main() -> None:
     )
     parser.add_argument("--publish-url", help="完成後 POST 至網站行情匯入 API")
     parser.add_argument("--token-env", default="CODEX_MARKET_INGEST_TOKEN", help="匯入 token 的環境變數名稱")
+    parser.add_argument("--fail-on-fetch-error", action="store_true", help="所有重試耗盡後以非零狀態結束")
     args = parser.parse_args()
     result = run(args.output_dir, keep_snapshots=not args.latest_only)
     fresh = sum(row["status"] == "fresh" for row in result["symbols"].values())
@@ -350,6 +392,8 @@ def main() -> None:
             raise RuntimeError(f"缺少環境變數 {args.token_env}")
         response = publish_json(args.publish_url, token, result)
         print(f"網站匯入完成：{response.get('imported', 0)} 檔")
+    if args.fail_on_fetch_error and any(item.get("fetchStatus") == "failed" for item in result["markets"].values()):
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

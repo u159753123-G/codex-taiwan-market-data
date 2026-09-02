@@ -73,11 +73,44 @@ class PriceNormalizationTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
-    def test_failed_market_keeps_previous_data_as_stale(self):
+    def test_failed_market_keeps_previous_price_status(self):
         previous = {"symbols": {"2330": {"symbol": "2330", "market": "TWSE", "close": 1000, "status": "fresh"}}}
-        stale = prices.stale_market(previous, "TWSE")
-        self.assertEqual(stale["2330"]["status"], "stale")
-        self.assertEqual(stale["2330"]["close"], 1000)
+        retained = prices.previous_market(previous, "TWSE")
+        self.assertEqual(retained["2330"]["status"], "fresh")
+        self.assertEqual(retained["2330"]["close"], 1000)
+
+    def test_twse_retries_three_times_after_initial_failure(self):
+        payload = json.dumps([{
+            "Date": "1150901", "Code": "2330", "Name": "台積電",
+            "TradeVolume": "1", "TradeValue": "1", "OpeningPrice": "1",
+            "HighestPrice": "1", "LowestPrice": "1", "ClosingPrice": "1",
+        }]).encode()
+        with patch.object(prices, "fetch_bytes", side_effect=[ValueError("1"), ValueError("2"), ValueError("3"), payload]) as fetch, \
+             patch.object(prices.time, "sleep") as sleep:
+            symbols, trade_date, attempts = prices.fetch_market("https://example.test", prices.parse_twse, (2, 4, 8))
+        self.assertEqual(attempts, 4)
+        self.assertEqual(trade_date, "2026-09-01")
+        self.assertEqual(symbols["2330"]["status"], "fresh")
+        self.assertEqual(fetch.call_count, 4)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8])
+
+    def test_fetch_failure_is_separate_from_retained_data_status(self):
+        previous = {
+            "generatedAt": "2026-09-01T12:00:00+00:00",
+            "markets": {"TWSE": {"dataStatus": "fresh", "lastSuccessAt": "2026-09-01T12:00:00+00:00"}},
+            "symbols": {"2330": {"symbol": "2330", "market": "TWSE", "close": 1000, "status": "fresh", "tradeDate": "2026-09-01"}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            prices.atomic_json_write(output / "codex_stock_prices_latest.json", previous)
+            tpex = {str(index): {"symbol": str(index), "market": "TPEx", "close": 1, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(300)}
+            with patch.object(prices, "fetch_market", side_effect=[RuntimeError("TWSE unavailable"), (tpex, "2026-09-02", 1)]), \
+                 patch.object(prices, "update_taiex_history", return_value={"ticker": "IX0001", "status": "fresh", "latest": None}):
+                result = prices.run(output, keep_snapshots=False)
+        self.assertEqual(result["markets"]["TWSE"]["fetchStatus"], "failed")
+        self.assertEqual(result["markets"]["TWSE"]["dataStatus"], "fresh")
+        self.assertEqual(result["symbols"]["2330"]["status"], "fresh")
+        self.assertEqual(result["markets"]["TWSE"]["consecutiveFetchFailures"], 1)
 
     def test_atomic_write_produces_valid_json(self):
         with tempfile.TemporaryDirectory() as directory:
