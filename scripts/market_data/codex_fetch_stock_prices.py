@@ -21,7 +21,7 @@ TPEX_URL = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk
 TAIEX_HISTORY_URL = "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={year:04d}{month:02d}01"
 HEADERS = {"User-Agent": "codex-taiwan-portfolio/1.0"}
 MIN_RECORDS = {"TWSE": 500, "TPEx": 300}
-TWSE_RETRY_DELAYS = (2, 4, 8)
+MARKET_RETRY_DELAYS = (2, 4, 8)
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -298,8 +298,7 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
         ("TPEx", TPEX_URL, parse_tpex),
     ):
         try:
-            retry_delays = TWSE_RETRY_DELAYS if market == "TWSE" else ()
-            symbols, trade_date, attempts = fetch_market(url, parser, retry_delays)
+            symbols, trade_date, attempts = fetch_market(url, parser, MARKET_RETRY_DELAYS)
             validate_market(market, symbols)
             combined.update(symbols)
             if trade_date:
@@ -330,7 +329,7 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
                 "dataStatus": retained_data_status,
                 "tradeDate": next((row.get("tradeDate") for row in fallback.values()), None),
                 "recordCount": len(fallback),
-                "attemptCount": len(TWSE_RETRY_DELAYS) + 1 if market == "TWSE" else 1,
+                "attemptCount": len(MARKET_RETRY_DELAYS) + 1,
                 "consecutiveFetchFailures": int(previous_status.get("consecutiveFetchFailures") or 0) + 1,
                 "lastAttemptAt": generated_at,
                 "lastSuccessAt": previous_status.get("lastSuccessAt") or (previous.get("generatedAt") if fallback else None),
