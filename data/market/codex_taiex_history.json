@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-09-04T12:15:06+00:00",
+  "generatedAt": "2026-09-04T15:01:16+00:00",
   "ticker": "IX0001",
   "name": "發行量加權股價指數",
   "source": "TWSE",
-  "status": "stale",
+  "status": "fresh",
   "latest": {
-    "date": "2026-09-03",
-    "open": 46325.48,
-    "high": 46517.45,
-    "low": 45839.36,
-    "close": 45857.66
+    "date": "2026-09-04",
+    "open": 45991.28,
+    "high": 46620.96,
+    "low": 45966.86,
+    "close": 46551.13
   },
   "prices": [
     {
@@ -1145,9 +1145,14 @@
       "high": 46517.45,
       "low": 45839.36,
       "close": 45857.66
+    },
+    {
+      "date": "2026-09-04",
+      "open": 45991.28,
+      "high": 46620.96,
+      "low": 45966.86,
+      "close": 46551.13
     }
   ],
-  "errors": [
-    "2026-09: HTTP Error 307: Temporary Redirect"
-  ]
+  "errors": []
 }
