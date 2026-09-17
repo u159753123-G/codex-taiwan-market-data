@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-09-17T12:45:43+00:00",
+  "generatedAt": "2026-09-17T15:35:33+00:00",
   "ticker": "IX0001",
   "name": "發行量加權股價指數",
   "source": "TWSE",
-  "status": "fresh",
+  "status": "stale",
   "latest": {
     "date": "2026-09-17",
     "open": 45936.11,
@@ -1217,5 +1217,7 @@
       "close": 46288
     }
   ],
-  "errors": []
+  "errors": [
+    "2026-09: HTTP Error 307: Temporary Redirect"
+  ]
 }

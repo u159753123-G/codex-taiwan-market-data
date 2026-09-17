@@ -1,18 +1,18 @@
 {
-  "generatedAt": "2026-09-17T12:45:37+00:00",
+  "generatedAt": "2026-09-17T15:35:06+00:00",
   "tradeDate": "2026-09-17",
   "markets": {
     "TWSE": {
-      "status": "success",
-      "fetchStatus": "success",
+      "status": "stale",
+      "fetchStatus": "failed",
       "dataStatus": "fresh",
       "tradeDate": "2026-09-16",
       "recordCount": 1379,
-      "attemptCount": 1,
-      "consecutiveFetchFailures": 0,
-      "lastAttemptAt": "2026-09-17T12:45:37+00:00",
+      "attemptCount": 4,
+      "consecutiveFetchFailures": 1,
+      "lastAttemptAt": "2026-09-17T15:35:06+00:00",
       "lastSuccessAt": "2026-09-17T12:45:37+00:00",
-      "error": null
+      "error": "連續 4 次請求失敗：Expecting value: line 1 column 1 (char 0)"
     },
     "TPEx": {
       "status": "success",
@@ -22,8 +22,8 @@
       "recordCount": 1014,
       "attemptCount": 1,
       "consecutiveFetchFailures": 0,
-      "lastAttemptAt": "2026-09-17T12:45:37+00:00",
-      "lastSuccessAt": "2026-09-17T12:45:37+00:00",
+      "lastAttemptAt": "2026-09-17T15:35:06+00:00",
+      "lastSuccessAt": "2026-09-17T15:35:06+00:00",
       "error": null
     }
   },
@@ -33531,5 +33531,10 @@
       "status": "fresh"
     }
   },
-  "errors": []
+  "errors": [
+    {
+      "market": "TWSE",
+      "message": "連續 4 次請求失敗：Expecting value: line 1 column 1 (char 0)"
+    }
+  ]
 }
