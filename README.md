@@ -6,6 +6,7 @@
 
 - 上市：TWSE `STOCK_DAY_ALL` OpenAPI
 - 上櫃：TPEx 盤後行情 CSV
+- 興櫃：TPEx `tpex_esb_latest_statistics` OpenAPI（最後成交價）
 
 ## 公開資料
 
@@ -16,6 +17,6 @@
 
 ## 自動更新
 
-GitHub Actions 在台北時間每個交易日 15:35 與 19:25 執行，也可從 Actions 頁面手動執行。流程會先跑單元測試，再抓取 TWSE／TPEx；若單一市場暫時失敗，會沿用上一份該市場資料並標示為 `stale`。
+GitHub Actions 在台北時間每個交易日 15:35 與 19:25 執行，也可從 Actions 頁面手動執行。流程會先跑單元測試，再抓取 TWSE／TPEx／興櫃；若單一市場暫時失敗，會沿用上一份該市場資料。興櫃股票當日無成交時會沿用前次有效成交價並標示為 `previous`。
 
 本專案僅提供資料整理與追蹤用途，不構成投資建議。

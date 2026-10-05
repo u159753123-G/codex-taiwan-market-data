@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""抓取 TWSE／TPEx 官方盤後資料，輸出 Portfolio 專用行情 JSON。"""
+"""抓取 TWSE／TPEx／興櫃官方行情，輸出 Portfolio 專用行情 JSON。"""
 
 from __future__ import annotations
 
@@ -18,9 +18,10 @@ from typing import Any
 
 TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 TPEX_URL = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&se=EW&o=data"
+ESB_URL = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
 TAIEX_HISTORY_URL = "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={year:04d}{month:02d}01"
 HEADERS = {"User-Agent": "codex-taiwan-portfolio/1.0"}
-MIN_RECORDS = {"TWSE": 500, "TPEx": 300}
+MIN_RECORDS = {"TWSE": 500, "TPEx": 300, "ESB": 100}
 MARKET_RETRY_DELAYS = (2, 4, 8)
 
 
@@ -159,6 +160,35 @@ def parse_tpex(raw: bytes) -> tuple[dict[str, dict[str, Any]], str | None]:
     return symbols, next(iter(dates), None)
 
 
+def parse_esb(raw: bytes) -> tuple[dict[str, dict[str, Any]], str | None]:
+    rows = json.loads(decode_bytes(raw))
+    if not isinstance(rows, list):
+        raise ValueError("ESB 回傳格式不是 JSON array")
+    symbols: dict[str, dict[str, Any]] = {}
+    dates: set[str] = set()
+    for source in rows:
+        trade_date = roc_to_iso(source.get("Date"))
+        if trade_date:
+            dates.add(trade_date)
+        volume = to_number(source.get("TransactionVolume"))
+        latest = to_number(source.get("LatestPrice"))
+        if not volume or not latest or latest <= 0:
+            latest = None
+        average = to_number(source.get("Average"))
+        row = normalize_row(
+            symbol=source.get("SecuritiesCompanyCode"), name=source.get("CompanyName"),
+            market="ESB", close=latest, open_price=None,
+            high=source.get("Highest"), low=source.get("Lowest"), volume=volume,
+            trade_value=(average * volume if average is not None and volume is not None else None),
+            trade_date=trade_date,
+        )
+        if row:
+            symbols[row["symbol"]] = row
+    if len(dates) > 1:
+        raise ValueError(f"ESB 同批資料含多個交易日: {sorted(dates)}")
+    return symbols, next(iter(dates), None)
+
+
 def parse_taiex_history(raw: bytes) -> list[dict[str, Any]]:
     payload = json.loads(decode_bytes(raw))
     if payload.get("stat") != "OK" or not isinstance(payload.get("data"), list):
@@ -284,6 +314,19 @@ def previous_market(previous: dict[str, Any], market: str) -> dict[str, dict[str
     return retained
 
 
+def retain_previous_untraded_esb(
+    symbols: dict[str, dict[str, Any]], previous: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    previous_symbols = previous_market(previous, "ESB")
+    for symbol, row in symbols.items():
+        old = previous_symbols.get(symbol)
+        if row.get("close") is None and old and old.get("close") is not None:
+            row["close"] = old["close"]
+            row["tradeDate"] = old.get("tradeDate")
+            row["status"] = "previous"
+    return symbols
+
+
 def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
     latest_path = output_dir / "codex_stock_prices_latest.json"
     previous = load_json(latest_path) or {}
@@ -296,10 +339,13 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
     for market, url, parser in (
         ("TWSE", TWSE_URL, parse_twse),
         ("TPEx", TPEX_URL, parse_tpex),
+        ("ESB", ESB_URL, parse_esb),
     ):
         try:
             symbols, trade_date, attempts = fetch_market(url, parser, MARKET_RETRY_DELAYS)
             validate_market(market, symbols)
+            if market == "ESB":
+                symbols = retain_previous_untraded_esb(symbols, previous)
             combined.update(symbols)
             if trade_date:
                 trade_dates.append(trade_date)
@@ -337,7 +383,7 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
             }
 
     if not combined:
-        raise RuntimeError("兩個市場皆抓取失敗，且沒有舊行情可沿用")
+        raise RuntimeError("所有市場皆抓取失敗，且沒有舊行情可沿用")
 
     trade_date = max(trade_dates) if trade_dates else previous.get("tradeDate")
     result = {

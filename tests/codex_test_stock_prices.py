@@ -56,6 +56,26 @@ class PriceNormalizationTests(unittest.TestCase):
         self.assertEqual(trade_date, "2026-08-13")
         self.assertEqual(symbols["7828"]["close"], 1910)
 
+    def test_esb_parser_uses_latest_trade_and_marks_no_trade_as_missing(self):
+        payload = json.dumps([
+            {"Date": "1151005", "SecuritiesCompanyCode": "1260", "CompanyName": "富味鄉", "Highest": "32.35", "Lowest": "30.45", "Average": "30.99", "LatestPrice": "32", "TransactionVolume": "85525"},
+            {"Date": "1151005", "SecuritiesCompanyCode": "1293", "CompanyName": "利統", "Highest": "0", "Lowest": "0", "Average": "0", "LatestPrice": "0", "TransactionVolume": "0"},
+        ], ensure_ascii=False).encode()
+        symbols, trade_date = prices.parse_esb(payload)
+        self.assertEqual(trade_date, "2026-10-05")
+        self.assertEqual(symbols["1260"]["market"], "ESB")
+        self.assertEqual(symbols["1260"]["close"], 32)
+        self.assertEqual(symbols["1260"]["value"], 2650419.75)
+        self.assertIsNone(symbols["1293"]["close"])
+
+    def test_untraded_esb_retains_previous_valid_trade(self):
+        current = {"1293": {"symbol": "1293", "market": "ESB", "close": None, "tradeDate": "2026-10-05", "status": "fresh"}}
+        previous = {"symbols": {"1293": {"symbol": "1293", "market": "ESB", "close": 23.6, "tradeDate": "2026-10-02", "status": "fresh"}}}
+        retained = prices.retain_previous_untraded_esb(current, previous)
+        self.assertEqual(retained["1293"]["close"], 23.6)
+        self.assertEqual(retained["1293"]["tradeDate"], "2026-10-02")
+        self.assertEqual(retained["1293"]["status"], "previous")
+
     def test_taiex_history_parser(self):
         payload = json.dumps({
             "stat": "OK",
@@ -104,7 +124,8 @@ class FallbackTests(unittest.TestCase):
             output = Path(directory)
             prices.atomic_json_write(output / "codex_stock_prices_latest.json", previous)
             tpex = {str(index): {"symbol": str(index), "market": "TPEx", "close": 1, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(300)}
-            with patch.object(prices, "fetch_market", side_effect=[RuntimeError("TWSE unavailable"), (tpex, "2026-09-02", 1)]), \
+            esb = {str(index): {"symbol": str(index), "market": "ESB", "close": 1, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(100)}
+            with patch.object(prices, "fetch_market", side_effect=[RuntimeError("TWSE unavailable"), (tpex, "2026-09-02", 1), (esb, "2026-09-02", 1)]), \
                  patch.object(prices, "update_taiex_history", return_value={"ticker": "IX0001", "status": "fresh", "latest": None}):
                 result = prices.run(output, keep_snapshots=False)
         self.assertEqual(result["markets"]["TWSE"]["fetchStatus"], "failed")
