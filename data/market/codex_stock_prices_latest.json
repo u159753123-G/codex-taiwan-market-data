@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-05T15:45:54+00:00",
+  "generatedAt": "2026-11-05T18:51:46+00:00",
   "tradeDate": "2026-11-05",
   "markets": {
     "TWSE": {
@@ -10,8 +10,8 @@
       "recordCount": 1390,
       "attemptCount": 1,
       "consecutiveFetchFailures": 0,
-      "lastAttemptAt": "2026-11-05T15:45:54+00:00",
-      "lastSuccessAt": "2026-11-05T15:45:54+00:00",
+      "lastAttemptAt": "2026-11-05T18:51:46+00:00",
+      "lastSuccessAt": "2026-11-05T18:51:46+00:00",
       "error": null
     },
     "TPEx": {
@@ -22,8 +22,8 @@
       "recordCount": 1017,
       "attemptCount": 1,
       "consecutiveFetchFailures": 0,
-      "lastAttemptAt": "2026-11-05T15:45:54+00:00",
-      "lastSuccessAt": "2026-11-05T15:45:54+00:00",
+      "lastAttemptAt": "2026-11-05T18:51:46+00:00",
+      "lastSuccessAt": "2026-11-05T18:51:46+00:00",
       "error": null
     },
     "ESB": {
@@ -34,8 +34,8 @@
       "recordCount": 367,
       "attemptCount": 1,
       "consecutiveFetchFailures": 0,
-      "lastAttemptAt": "2026-11-05T15:45:54+00:00",
-      "lastSuccessAt": "2026-11-05T15:45:54+00:00",
+      "lastAttemptAt": "2026-11-05T18:51:46+00:00",
+      "lastSuccessAt": "2026-11-05T18:51:46+00:00",
       "error": null
     }
   },
