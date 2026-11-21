@@ -76,6 +76,21 @@ class PriceNormalizationTests(unittest.TestCase):
         self.assertEqual(retained["1293"]["tradeDate"], "2026-10-02")
         self.assertEqual(retained["1293"]["status"], "previous")
 
+    def test_cb_issue_and_quote_parsers(self):
+        issues = prices.parse_cb_issues(json.dumps([
+            {"BondCode": "36173", "ShortName": "碩天三", "ListingStatus": "2"},
+            {"BondCode": "36172", "ShortName": "碩天二", "ListingStatus": "1"},
+        ], ensure_ascii=False).encode())
+        self.assertEqual(issues, {"36173": "碩天三"})
+        quote = prices.parse_cb_quote(json.dumps({"tables": [{"data": [
+            ["1151119", "等價", "116.0000", "-1.0000", "116.9500", "116.9500", "113.6000", "22", "59", "6,792,450"],
+            ["1151120", "等價", "110.0000", "-6.0000", "112.2000", "113.0500", "108.5000", "30", "72", "7,940,100"],
+        ]}]}, ensure_ascii=False).encode())
+        self.assertEqual(quote, {
+            "tradeDate": "2026-11-20", "close": 110, "open": 112.2,
+            "high": 113.05, "low": 108.5, "volume": 72, "value": 7940100,
+        })
+
     def test_taiex_history_parser(self):
         payload = json.dumps({
             "stat": "OK",
@@ -125,7 +140,9 @@ class FallbackTests(unittest.TestCase):
             prices.atomic_json_write(output / "codex_stock_prices_latest.json", previous)
             tpex = {str(index): {"symbol": str(index), "market": "TPEx", "close": 1, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(300)}
             esb = {str(index): {"symbol": str(index), "market": "ESB", "close": 1, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(100)}
+            cb = {f"CB{index}": {"symbol": f"CB{index}", "market": "CB", "close": 100, "status": "fresh", "tradeDate": "2026-09-02"} for index in range(100)}
             with patch.object(prices, "fetch_market", side_effect=[RuntimeError("TWSE unavailable"), (tpex, "2026-09-02", 1), (esb, "2026-09-02", 1)]), \
+                 patch.object(prices, "fetch_convertible_bonds", return_value=(cb, "2026-09-02", 1, [])), \
                  patch.object(prices, "update_taiex_history", return_value={"ticker": "IX0001", "status": "fresh", "latest": None}):
                 result = prices.run(output, keep_snapshots=False)
         self.assertEqual(result["markets"]["TWSE"]["fetchStatus"], "failed")

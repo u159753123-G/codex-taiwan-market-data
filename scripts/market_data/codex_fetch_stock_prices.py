@@ -11,22 +11,36 @@ import os
 import re
 import tempfile
 import time
+import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 TPEX_URL = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&se=EW&o=data"
 ESB_URL = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
+CB_ISSUES_URL = "https://www.tpex.org.tw/openapi/v1/bond_ISSBD5_data"
+CB_QUOTES_URL = "https://www.tpex.org.tw/www/zh-tw/bond/cbDayQry"
 TAIEX_HISTORY_URL = "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={year:04d}{month:02d}01"
 HEADERS = {"User-Agent": "codex-taiwan-portfolio/1.0"}
-MIN_RECORDS = {"TWSE": 500, "TPEx": 300, "ESB": 100}
+MIN_RECORDS = {"TWSE": 500, "TPEx": 300, "ESB": 100, "CB": 100}
 MARKET_RETRY_DELAYS = (2, 4, 8)
 
 
 def fetch_bytes(url: str) -> bytes:
     request = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def post_form_bytes(url: str, fields: dict[str, str]) -> bytes:
+    body = urllib.parse.urlencode(fields).encode("ascii")
+    request = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={**HEADERS, "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+    )
     with urllib.request.urlopen(request, timeout=30) as response:
         return response.read()
 
@@ -189,6 +203,97 @@ def parse_esb(raw: bytes) -> tuple[dict[str, dict[str, Any]], str | None]:
     return symbols, next(iter(dates), None)
 
 
+def parse_cb_issues(raw: bytes) -> dict[str, str]:
+    rows = json.loads(decode_bytes(raw))
+    if not isinstance(rows, list):
+        raise ValueError("CB 發行資料不是 JSON array")
+    return {
+        str(row.get("BondCode") or "").strip(): str(row.get("ShortName") or row.get("IssuerName") or "").strip()
+        for row in rows
+        if str(row.get("BondCode") or "").strip() and str(row.get("ListingStatus") or "").strip() == "2"
+    }
+
+
+def parse_cb_quote(raw: bytes) -> dict[str, Any] | None:
+    payload = json.loads(decode_bytes(raw))
+    rows = (payload.get("tables") or [{}])[0].get("data") or []
+    quotes: list[dict[str, Any]] = []
+    for source in rows:
+        if not isinstance(source, list) or len(source) < 10 or source[1] != "等價":
+            continue
+        trade_date = roc_to_iso(source[0])
+        close = to_number(source[2])
+        if not trade_date or close is None:
+            continue
+        quotes.append({
+            "tradeDate": trade_date, "close": close,
+            "open": to_number(source[4]), "high": to_number(source[5]),
+            "low": to_number(source[6]), "volume": to_number(source[8]),
+            "value": to_number(source[9]),
+        })
+    return max(quotes, key=lambda row: row["tradeDate"], default=None)
+
+
+def fetch_convertible_bonds(previous: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], str | None, int, list[str]]:
+    issues = parse_cb_issues(fetch_bytes(CB_ISSUES_URL))
+    if len(issues) < MIN_RECORDS["CB"]:
+        raise ValueError(f"CB 掛牌筆數異常過少（{len(issues)} 筆）")
+    now = datetime.now(timezone(timedelta(hours=8)))
+    month_start = f"{now.year:04d}/{now.month:02d}/01"
+    old = previous_market(previous, "CB")
+    symbols: dict[str, dict[str, Any]] = {
+        symbol: {
+            **old.get(symbol, {}), "symbol": symbol, "name": name, "market": "CB",
+            "source": "TPEx-CB", "status": "previous",
+        }
+        for symbol, name in issues.items()
+    }
+    successful_requests = 0
+    failed_symbols: list[str] = []
+
+    def fetch_one(symbol: str) -> tuple[str, dict[str, Any] | None]:
+        last_error: Exception | None = None
+        for delay in (0, 0.5, 1.5):
+            if delay:
+                time.sleep(delay)
+            try:
+                raw = post_form_bytes(CB_QUOTES_URL, {"date": month_start, "code": symbol, "response": "json"})
+                return symbol, parse_cb_quote(raw)
+            except Exception as error:
+                last_error = error
+        raise RuntimeError(f"CB {symbol} 連續 3 次請求失敗：{last_error}")
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_one, symbol): symbol for symbol in issues}
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                _, quote = future.result()
+                successful_requests += 1
+            except Exception:
+                failed_symbols.append(symbol)
+                continue
+            previous_row = old.get(symbol)
+            if quote is None and previous_row and previous_row.get("close") is not None:
+                symbols[symbol] = {**previous_row, "name": issues[symbol], "market": "CB", "status": "previous"}
+                continue
+            symbols[symbol] = {
+                "symbol": symbol, "name": issues[symbol], "market": "CB",
+                "close": quote.get("close") if quote else None,
+                "open": quote.get("open") if quote else None,
+                "high": quote.get("high") if quote else None,
+                "low": quote.get("low") if quote else None,
+                "volume": quote.get("volume") if quote else None,
+                "value": quote.get("value") if quote else None,
+                "tradeDate": quote.get("tradeDate") if quote else None,
+                "source": "TPEx-CB", "status": "fresh" if quote else "previous",
+            }
+    if successful_requests == 0:
+        raise RuntimeError("CB 全部行情請求失敗")
+    trade_date = max((row["tradeDate"] for row in symbols.values() if row.get("tradeDate")), default=None)
+    return symbols, trade_date, 1, failed_symbols
+
+
 def parse_taiex_history(raw: bytes) -> list[dict[str, Any]]:
     payload = json.loads(decode_bytes(raw))
     if payload.get("stat") != "OK" or not isinstance(payload.get("data"), list):
@@ -340,9 +445,14 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
         ("TWSE", TWSE_URL, parse_twse),
         ("TPEx", TPEX_URL, parse_tpex),
         ("ESB", ESB_URL, parse_esb),
+        ("CB", None, None),
     ):
         try:
-            symbols, trade_date, attempts = fetch_market(url, parser, MARKET_RETRY_DELAYS)
+            partial_failures: list[str] = []
+            if market == "CB":
+                symbols, trade_date, attempts, partial_failures = fetch_convertible_bonds(previous)
+            else:
+                symbols, trade_date, attempts = fetch_market(url, parser, MARKET_RETRY_DELAYS)
             validate_market(market, symbols)
             if market == "ESB":
                 symbols = retain_previous_untraded_esb(symbols, previous)
@@ -350,8 +460,8 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
             if trade_date:
                 trade_dates.append(trade_date)
             market_status[market] = {
-                "status": "success",
-                "fetchStatus": "success",
+                "status": "stale" if partial_failures else "success",
+                "fetchStatus": "failed" if partial_failures else "success",
                 "dataStatus": "fresh",
                 "tradeDate": trade_date,
                 "recordCount": len(symbols),
@@ -359,8 +469,10 @@ def run(output_dir: Path, keep_snapshots: bool = True) -> dict[str, Any]:
                 "consecutiveFetchFailures": 0,
                 "lastAttemptAt": generated_at,
                 "lastSuccessAt": generated_at,
-                "error": None,
+                "error": (f"{len(partial_failures)} 檔行情請求失敗：{', '.join(sorted(partial_failures)[:10])}" if partial_failures else None),
             }
+            if partial_failures:
+                errors.append({"market": market, "message": market_status[market]["error"]})
         except Exception as error:
             fallback = previous_market(previous, market)
             combined.update(fallback)
